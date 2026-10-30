@@ -1,0 +1,55 @@
+name: Update forex data
+
+on:
+  push:
+    branches: ["main"]         # runs when you upload or edit files on the website
+  schedule:
+    - cron: "30 11 * * 1-5"    # 11:30 UTC = 5:00 PM IST, Monday to Friday
+  workflow_dispatch:           # adds a "Run workflow" button for live demos
+
+permissions:
+  contents: write              # lets the robot save new data into the repo
+  pages: write                 # lets the robot publish the website
+  id-token: write              # proves to GitHub Pages that this run is allowed to publish
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  update-and-publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run the pipeline
+        run: python fetch_rates.py
+
+      - name: Save updated data to the repo
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git add data
+          git diff --cached --quiet || git commit -m "Update rates $(date -u +%F)"
+          git push
+
+      - name: Set up Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload website files
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - name: Publish website
+        id: deployment
+        uses: actions/deploy-pages@v5
