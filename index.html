@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RupeeWatch: daily INR exchange rates</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#f5f7fa; --panel:#ffffff; --ink:#14213d; --muted:#5b6678; --rule:#d9e0ea;
+  --line:#1f3fbf; --avg:#d97b00; --up:#0c7a5f; --down:#b3303f; --sel:#e6ecfb;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#0f1626; --panel:#172036; --ink:#e8edf7; --muted:#9aa6bd; --rule:#2a3552;
+    --line:#7f9cff; --avg:#ffb347; --up:#4fd1a5; --down:#ff7a8a; --sel:#22304f;
+  }
+}
+*{box-sizing:border-box}
+html{height:100%}
+body{margin:0;min-height:100%;background:var(--paper);color:var(--ink);
+  font-family:"Public Sans",system-ui,-apple-system,"Segoe UI",Arial,sans-serif;line-height:1.5;
+  font-variant-numeric:tabular-nums}
+.wrap{max-width:1040px;margin:0 auto;padding:28px 20px 40px}
+header{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;
+  border-bottom:2px solid var(--ink);padding-bottom:12px}
+h1{margin:0;font-size:1.6rem;font-weight:800;letter-spacing:-.02em}
+.sub{color:var(--muted);font-size:.92rem;margin:0}
+main{display:grid;grid-template-columns:260px 1fr;gap:28px;margin-top:22px}
+@media (max-width:760px){main{grid-template-columns:1fr}}
+.board{list-style:none;margin:0;padding:0;border:1px solid var(--rule);background:var(--panel)}
+.board li+li{border-top:1px solid var(--rule)}
+.board button{all:unset;box-sizing:border-box;display:grid;grid-template-columns:1fr auto;gap:0 12px;width:100%;
+  padding:12px 14px;cursor:pointer}
+.board button:hover{background:var(--sel)}
+.board button[aria-pressed="true"]{background:var(--sel);box-shadow:inset 4px 0 0 var(--line)}
+.board button:focus-visible,.range button:focus-visible{outline:3px solid var(--line);outline-offset:-3px}
+.code{font-weight:800}
+.nm{color:var(--muted);font-size:.8rem}
+.px{text-align:right;font-weight:600}
+.chg{text-align:right;font-size:.8rem}
+.up{color:var(--up)} .down{color:var(--down)}
+.hero{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+.big{font-size:clamp(2rem,6vw,3.2rem);font-weight:800;letter-spacing:-.03em;line-height:1.1}
+.range{display:flex;gap:6px;margin:14px 0 8px}
+.range button{font:inherit;font-size:.85rem;padding:5px 12px;border:1px solid var(--rule);background:var(--panel);
+  color:var(--ink);cursor:pointer;border-radius:4px}
+.range button[aria-pressed="true"]{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.chartbox{position:relative;height:320px;background:var(--panel);border:1px solid var(--rule);padding:10px}
+.insights{margin-top:18px;border-left:4px solid var(--avg);padding:2px 0 2px 16px}
+.insights h2{margin:0 0 6px;font-size:1.05rem}
+.insights p{margin:6px 0;max-width:68ch}
+footer{margin-top:28px;color:var(--muted);font-size:.82rem;max-width:72ch}
+#msg{display:none;padding:18px;border:1px solid var(--down);background:var(--panel);margin-top:22px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>RupeeWatch</h1>
+    <p class="sub" id="updated">Loading latest data…</p>
+  </header>
+  <p class="sub" style="margin-top:10px">How many rupees one unit of a foreign currency costs, refreshed automatically every weekday.</p>
+
+  <div id="msg">No data yet. Open the Actions tab in your repository, choose “Update forex data”, and click Run workflow. Reload this page after the run finishes.</div>
+
+  <main id="app" hidden>
+    <ul class="board" id="board"></ul>
+    <section>
+      <div class="hero"><span class="big" id="bigRate"></span><span id="bigChg"></span></div>
+      <div class="range" id="range">
+        <button data-d="30" aria-pressed="true">30 days</button>
+        <button data-d="90" aria-pressed="false">90 days</button>
+        <button data-d="9999" aria-pressed="false">All</button>
+      </div>
+      <div class="chartbox"><canvas id="chart" role="img" aria-label="Line chart of the rupee price of the selected currency over time"></canvas></div>
+      <div class="insights">
+        <h2>What the last 30 days say</h2>
+        <p id="ins1"></p><p id="ins2"></p><p id="ins3"></p>
+      </div>
+    </section>
+  </main>
+
+  <footer>Rates are daily mid-market reference rates from the free Frankfurter API, collected by a GitHub Actions pipeline. They are not the rates a bank or money changer will charge you, so treat this as a trend guide only.</footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+const NAMES = {USD:"US dollar", EUR:"Euro", GBP:"British pound", SGD:"Singapore dollar", AUD:"Australian dollar"};
+let DATA, cur = "USD", span = 30, chart;
+
+const $ = id => document.getElementById(id);
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const fmt = n => n.toFixed(2);
+const day = s => new Date(s + "T00:00:00").toLocaleDateString("en-IN", {day:"numeric", month:"short"});
+const pct = n => (n >= 0 ? "▲ " : "▼ ") + Math.abs(n).toFixed(2) + "%";
+const cls = n => n >= 0 ? "up" : "down";
+
+fetch("data/rates.json", {cache: "no-store"})
+  .then(r => { if (!r.ok) throw new Error("missing"); return r.json(); })
+  .then(d => { DATA = d; start(); })
+  .catch(() => { $("msg").style.display = "block"; $("updated").textContent = "No data loaded"; });
+
+function start(){
+  $("updated").textContent = "Updated " + new Date(DATA.updated).toLocaleString("en-IN", {dateStyle:"medium", timeStyle:"short"});
+  $("app").hidden = false;
+  $("board").innerHTML = Object.keys(DATA.series).map(c => {
+    const s = DATA.series[c], last = s[s.length - 1];
+    return `<li><button data-c="${c}" aria-pressed="${c === cur}">
+      <span class="code">${c}</span><span class="px">₹${fmt(last.inr_per_unit)}</span>
+      <span class="nm">${NAMES[c] || c}</span><span class="chg ${cls(last.change_pct)}">${pct(last.change_pct)}</span></button></li>`;
+  }).join("");
+  $("board").addEventListener("click", e => {
+    const b = e.target.closest("button"); if (!b) return;
+    cur = b.dataset.c;
+    document.querySelectorAll("#board button").forEach(x => x.setAttribute("aria-pressed", x === b));
+    render();
+  });
+  $("range").addEventListener("click", e => {
+    const b = e.target.closest("button"); if (!b) return;
+    span = +b.dataset.d;
+    document.querySelectorAll("#range button").forEach(x => x.setAttribute("aria-pressed", x === b));
+    render();
+  });
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
+  render();
+}
+
+function lastDays(rows, n){
+  const end = new Date(rows[rows.length - 1].date + "T00:00:00");
+  const cut = new Date(end); cut.setDate(cut.getDate() - n);
+  return rows.filter(r => new Date(r.date + "T00:00:00") >= cut);
+}
+
+function render(){
+  const rows = DATA.series[cur], last = rows[rows.length - 1];
+  $("bigRate").textContent = `1 ${NAMES[cur] || cur} = ₹${fmt(last.inr_per_unit)}`;
+  $("bigChg").className = cls(last.change_pct);
+  $("bigChg").textContent = pct(last.change_pct) + " since the previous rate";
+
+  const view = lastDays(rows, span);
+  if (chart) chart.destroy();
+  chart = new Chart($("chart"), {
+    type: "line",
+    data: {
+      labels: view.map(r => day(r.date)),
+      datasets: [
+        {label: "Daily rate", data: view.map(r => r.inr_per_unit), borderColor: css("--line"), borderWidth: 2, pointRadius: 0, tension: .2},
+        {label: "7-day average", data: view.map(r => r.ma7), borderColor: css("--avg"), borderWidth: 2, borderDash: [6, 4], pointRadius: 0, tension: .2}
+      ]
+    },
+    options: {
+      maintainAspectRatio: false, interaction: {mode: "index", intersect: false},
+      plugins: {legend: {labels: {color: css("--ink")}},
+        tooltip: {callbacks: {label: c => `${c.dataset.label}: ₹${c.parsed.y.toFixed(2)}`}}},
+      scales: {
+        x: {ticks: {color: css("--muted"), maxTicksLimit: 7}, grid: {display: false}},
+        y: {ticks: {color: css("--muted"), callback: v => "₹" + v}, grid: {color: css("--rule")}}
+      }
+    }
+  });
+
+  const m = lastDays(rows, 30);
+  const hi = m.reduce((a, b) => b.inr_per_unit > a.inr_per_unit ? b : a);
+  const lo = m.reduce((a, b) => b.inr_per_unit < a.inr_per_unit ? b : a);
+  const avg = m.reduce((s, r) => s + r.inr_per_unit, 0) / m.length;
+  const diff = (last.inr_per_unit - avg) / avg * 100;
+  $("ins1").textContent = `If you receive ${cur} (exporters, family sending money to India), the best day was ${day(hi.date)} at ₹${fmt(hi.inr_per_unit)}.`;
+  $("ins2").textContent = `If you are buying ${cur} (students, travellers, importers), the cheapest day was ${day(lo.date)} at ₹${fmt(lo.inr_per_unit)}.`;
+  $("ins3").textContent = `The 30-day average is ₹${fmt(avg)}. Today’s rate is ${Math.abs(diff).toFixed(2)}% ${diff >= 0 ? "above" : "below"} it.`;
+}
+</script>
+</body>
+</html>
